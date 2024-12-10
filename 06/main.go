@@ -7,133 +7,213 @@ import (
 	"strings"
 )
 
-const up byte = '^'
-const down byte = 'v'
-const left byte = '<'
-const right byte = '>'
-const obstacle byte = '#'
+const OBSTACLE byte = '#'
 
-func main() {
-	buf, _ := os.ReadFile("RAW_INPUT.txt")
-	input := string(buf)
+type Orientation byte
+
+const (
+	UP    Orientation = '^'
+	DOWN  Orientation = 'v'
+	LEFT  Orientation = '<'
+	RIGHT Orientation = '>'
+)
+
+type grid struct {
+	width  int
+	height int
+	data   []byte
+	guard  guard
+}
+
+func newGrid(input string) grid {
 	lines := strings.Split(strings.ReplaceAll(input, "\r\n", "\n"), "\n")
+	width := len(lines[0])
+	height := len(lines)
+	data := make([]byte, width*height)
 
-	// build og_grid (y,x)
-	og_grid := [][]byte{}
-	for _, line := range lines {
-		og_grid = append(og_grid, []byte(line))
-	}
-
-	grid := copy_grid(og_grid)
-	move_guard(grid)
-
-	obstacle_ideas := [][]int{}
-	result := 0
-	for r, row := range grid {
-		for c, val := range row {
-			if val == up || val == down || val == left || val == right {
-				result++
-				// grab these spots to use them in part 2!
-				obstacle_ideas = append(obstacle_ideas, []int{r, c})
-			}
+	for y, line := range lines {
+		for x, val := range []byte(line) {
+			data[x+(y*width)] = val
 		}
 	}
 
-	fmt.Println("Part1:", result)
-
-	result = 0
-	for _, rc := range obstacle_ideas {
-		i := rc[0]
-		j := rc[1]
-		c := og_grid[i][j]
-		if c == '.' {
-			// make a grid copy
-			grid2 := copy_grid(og_grid)
-			// replace current pos with obstacle
-			grid2[i][j] = obstacle
-
-			if move_guard(grid2) {
-				result++
-			}
-
-			print(".")
-		}
+	pos := slices.Index(data, byte(UP))
+	if pos == -1 {
+		panic("Could not find the guard! Send help!")
 	}
-	println()
-	fmt.Println("Part2:", result)
+	x := pos % width
+	y := pos / width
+	o := UP
+	guard := guard{false, []breadcrumb{{x, y, o}}}
+
+	return grid{width, height, data, guard}
 }
 
-func copy_grid(grid [][]byte) [][]byte {
-	g2 := make([][]byte, len(grid))
-	for i, row := range grid {
-		g2[i] = append(g2[i], row[:]...)
-	}
-	return g2
+func (g grid) clone() grid {
+	data := make([]byte, len(g.data))
+	copy(data, g.data)
+	return grid{g.width, g.height, data, g.guard.clone()}
 }
 
-func move_guard(grid [][]byte) bool {
-	guard_xy := []int{-1, -1}
+func (g grid) withinBounds(pos breadcrumb) bool {
+	return pos.x >= 0 && pos.x < g.width && pos.y >= 0 && pos.y < g.height
+}
 
-	// find guard
-	for i, row := range grid {
-		if slices.Contains(row, '^') {
-			guard_xy[1] = i
-			guard_xy[0] = slices.Index(row, '^')
-			break
+func (g grid) guardWithinBounds() bool {
+	return g.withinBounds(g.guard.pos())
+}
+
+// func (g grid) print() {
+// 	for i, val := range g.data {
+// 		if i%g.width == 0 {
+// 			fmt.Println()
+// 		}
+// 		fmt.Print(string(val))
+// 	}
+// 	fmt.Println()
+// }
+
+func (g grid) getVal(x int, y int) byte {
+	if !g.withinBounds(breadcrumb{x, y, UP}) {
+		panic("Out of bounds!")
+	}
+	return g.data[x+(y*g.width)]
+}
+
+func (g *grid) setVal(x int, y int, val byte) {
+	i := x + (y * g.width)
+	if i >= 0 && i < len(g.data) {
+		g.data[i] = val
+	}
+}
+
+func (g grid) uniquePathTiles() []breadcrumb {
+	tiles := make(map[int]breadcrumb)
+	for _, pos := range g.guard.path {
+		if g.withinBounds(pos) {
+			tiles[pos.x+(pos.y*g.width)] = pos
 		}
 	}
+	values := make([]breadcrumb, len(tiles))
 
-	turn_dest := up
-	hist := []string{}
-	// while guard on map
-	for within_bounds(guard_xy, grid) {
-		dest_xy := []int{guard_xy[0], guard_xy[1]}
-		guard_char := grid[guard_xy[1]][guard_xy[0]]
+	i := 0
+	for k := range tiles {
+		values[i] = tiles[k]
+		i++
+	}
+	return values
+}
 
-		if guard_char == up {
-			// move up
-			dest_xy[1] = dest_xy[1] - 1
-			turn_dest = right
-		} else if guard_char == down {
-			// move down
-			dest_xy[1] = dest_xy[1] + 1
-			turn_dest = left
-		} else if guard_char == left {
-			// move left
-			dest_xy[0] = dest_xy[0] - 1
-			turn_dest = up
-		} else if guard_char == right {
-			// move right
-			dest_xy[0] = dest_xy[0] + 1
-			turn_dest = down
-		} else {
+func (g *grid) move_guard() guard {
+	for g.guardWithinBounds() && !g.guard.looping {
+		move_dest := breadcrumb{g.guard.x(), g.guard.y(), g.guard.getOrientation()}
+		switch move_dest.o {
+		case UP:
+			move_dest.y--
+		case DOWN:
+			move_dest.y++
+		case LEFT:
+			move_dest.x--
+		case RIGHT:
+			move_dest.x++
+		default:
 			panic("unrecognized guard!?!?")
 		}
 
-		if !within_bounds(dest_xy, grid) {
-			break
+		if !g.withinBounds(move_dest) {
+			return g.guard
 		}
 
-		if grid[dest_xy[1]][dest_xy[0]] == obstacle {
+		if g.getVal(move_dest.x, move_dest.y) == OBSTACLE {
 			// dest is an obstacle, turn clockwise
-			grid[guard_xy[1]][guard_xy[0]] = byte(turn_dest)
+			g.guard.turnRight()
 		} else {
-			curr_move := string(guard_xy[0]) + string(guard_xy[1]) + string(grid[guard_xy[1]][guard_xy[0]])
-			// check if destination is already traveled in the same direction
-			if slices.Contains(hist, curr_move) {
-				// infinite loop detected!
-				return true
-			}
-			// register move
-			hist = append(hist, curr_move)
-			// move to destination
-			grid[dest_xy[1]][dest_xy[0]] = grid[guard_xy[1]][guard_xy[0]]
-			guard_xy = dest_xy
+			g.guard.move(move_dest)
 		}
 	}
-	return false
+	return g.guard
 }
 
-func within_bounds(pos_xy []int, grid [][]byte) bool {
-	return pos_xy[0] >= 0 && pos_xy[0] < len(grid[0]) && pos_xy[1] >= 0 && pos_xy[1] < len(grid)
+type breadcrumb struct {
+	x int
+	y int
+	o Orientation
+}
+
+type guard struct {
+	looping bool
+	path    []breadcrumb
+}
+
+func (g guard) clone() guard {
+	path := make([]breadcrumb, len(g.path))
+	copy(path, g.path)
+	return guard{g.looping, path}
+}
+
+func (g guard) x() int {
+	return g.path[len(g.path)-1].x
+}
+
+func (g guard) y() int {
+	return g.path[len(g.path)-1].y
+}
+
+func (g guard) getOrientation() Orientation {
+	return g.path[len(g.path)-1].o
+}
+
+func (g guard) pos() breadcrumb {
+	return g.path[len(g.path)-1]
+}
+
+func (g *guard) move(b breadcrumb) {
+	if slices.Contains(g.path, b) {
+		g.looping = true
+	}
+	g.path = append(g.path, b)
+}
+
+func (g *guard) turn(o Orientation) {
+	g.move(breadcrumb{g.x(), g.y(), o})
+}
+
+func (g *guard) turnRight() {
+	switch g.getOrientation() {
+	case UP:
+		g.turn(RIGHT)
+	case RIGHT:
+		g.turn(DOWN)
+	case DOWN:
+		g.turn(LEFT)
+	case LEFT:
+		g.turn(UP)
+	default:
+		panic("Imposter! GUAAAAARDS!")
+	}
+}
+
+func main() {
+	buf, _ := os.ReadFile("RAW_INPUT.txt")
+	og_grid := newGrid(string(buf))
+
+	grid_copy := og_grid.clone()
+	grid_copy.move_guard()
+
+	guard_path := grid_copy.uniquePathTiles()
+	fmt.Println("Part1:", len(guard_path))
+
+	result := 0
+	for _, pos := range guard_path {
+		if og_grid.getVal(pos.x, pos.y) == '.' {
+			grid_copy = og_grid.clone()
+			grid_copy.setVal(pos.x, pos.y, OBSTACLE)
+
+			if grid_copy.move_guard().looping {
+				result++
+			}
+		}
+	}
+
+	fmt.Println("Part2:", result)
 }
