@@ -9,79 +9,69 @@ import (
 )
 
 type equation struct {
-	result  uint64
-	numbers []uint64
-	reverse []uint64
+	result          uint64
+	reverse_numbers []uint64
 }
 
-func newEquation(line string) equation {
+func equationFromString(line string) equation {
 	items := strings.Split(line, ": ")
 	result, _ := strconv.ParseUint(items[0], 10, 64)
 	items = strings.Split(items[1], " ")
 	numbers := make([]uint64, len(items))
-	reverse := make([]uint64, len(items))
 	for i, n := range items {
 		num, _ := strconv.ParseUint(n, 10, 64)
 		numbers[i] = num
-		reverse[i] = num
 	}
 
-	slices.Reverse(reverse)
-
-	return equation{result, numbers, reverse}
+	slices.Reverse(numbers)
+	return equation{result, numbers}
 }
 
-func (e equation) solve() ([]byte, bool) {
-	return e.innerSolve([]byte{})
+func (e equation) isSolvable(use_concat bool) bool {
+	if len(e.reverse_numbers) == 1 {
+		return (e.result) == e.reverse_numbers[0]
+	}
+
+	return e.solveMult(use_concat) ||
+		e.solveAdd(use_concat) ||
+		(use_concat && e.solveConcat(use_concat))
 }
-func (e equation) innerSolve(ops []byte) ([]byte, bool) {
-	if len(e.reverse) == 1 {
-		return ops, (e.result) == e.reverse[0]
-	}
 
-	// more numbers left
-	sum := uint64(0)
-	for _, n := range e.reverse[1:] {
-		if n != 1 {
-			// 1's don't count because they are cancelled when multiplying!!!
-			sum = sum + n
-		}
-	}
+func (e equation) solveMult(use_concat bool) bool {
+	return e.result%e.reverse_numbers[0] == 0 &&
+		equation{e.result / e.reverse_numbers[0], e.reverse_numbers[1:]}.isSolvable(use_concat)
+}
 
-	res := e.result / e.reverse[0]
-	mod := e.result % e.reverse[0]
-	if res >= sum && mod == 0 {
-		ops2 := make([]byte, len(ops))
-		copy(ops2, ops)
-		ops2 = append(ops2, '*')
-		ops2, solved := equation{res, e.numbers, e.reverse[1:]}.innerSolve(ops2)
-		if solved {
-			return ops2, solved
-		}
-	}
+func (e equation) solveAdd(use_concat bool) bool {
+	return equation{e.result - e.reverse_numbers[0], e.reverse_numbers[1:]}.isSolvable(use_concat)
+}
 
-	res = e.result - e.reverse[0]
-	if res >= sum {
-		ops = append(ops, '+')
-		ops, solved := equation{res, e.numbers, e.reverse[1:]}.innerSolve(ops)
-		if solved {
-			return ops, solved
-		}
+func (e equation) solveConcat(use_concat bool) bool {
+	s_res := strconv.FormatUint(e.result, 10)
+	s_num := strconv.FormatUint(e.reverse_numbers[0], 10)
+	if strings.HasSuffix(s_res, s_num) {
+		s_res = s_res[:len(s_res)-len(s_num)]
+		res, _ := strconv.ParseUint(s_res, 10, 64)
+		return equation{res, e.reverse_numbers[1:]}.isSolvable(use_concat)
 	}
-	return ops, false
+	return false
 }
 
 func main() {
 	buf, _ := os.ReadFile("RAW_INPUT.txt")
 	lines := strings.Split(strings.ReplaceAll(string(buf), "\r\n", "\n"), "\n")
 
-	result := uint64(0)
+	result_p1 := uint64(0)
+	result_p2 := uint64(0)
 	for _, line := range lines {
-		eq := newEquation(line)
-		_, solved := eq.solve()
-		if solved {
-			result = result + eq.result
+		eq := equationFromString(line)
+		if eq.isSolvable(false) {
+			result_p1 = result_p1 + eq.result
+		}
+		if eq.isSolvable(true) {
+			result_p2 = result_p2 + eq.result
 		}
 	}
-	fmt.Println("Part1:", result)
+	fmt.Println("Part1:", result_p1)
+	fmt.Println("Part2:", result_p2)
 }
